@@ -1,0 +1,48 @@
+name: Backend - Validate & Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "invoice_backend/**"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          cd invoice_backend
+          pip install -r requirements-sqlite.txt
+
+      - name: Validate
+        run: |
+          cd invoice_backend
+          USE_SQLITE=1 python manage.py check
+          USE_SQLITE=1 python manage.py migrate --noinput
+        env:
+          DJANGO_SECRET_KEY: ci-validate
+          DEBUG: "1"
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    if: ${{ secrets.RAILWAY_TOKEN != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to Railway
+        uses: railwayapp/railway-deploy@v1
+        with:
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}

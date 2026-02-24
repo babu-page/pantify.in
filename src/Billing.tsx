@@ -1,8 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import { usePaintStore, Product } from './paintStore';
-import { Calculator, ShoppingCart, Trash2, ArrowRight, Zap, Target, DollarSign, Activity, ShieldCheck, Plus } from 'lucide-react';
+import { Calculator, ShoppingCart, Trash2, Target, DollarSign, Activity, ShieldCheck, Plus } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import clsx from 'clsx';
+import { createOrder, generateInvoice, downloadInvoicePdf } from './api/invoiceApi';
+
+const DEFAULT_STATE_CODE = '37'; // A.P.
 
 export const Billing = () => {
   const products = usePaintStore((state) => state.products) ?? [];
@@ -10,6 +12,14 @@ export const Billing = () => {
   const [cart, setCart] = useState<{ product: Product; quantity: number }[]>([]);
   const [selectedProductId, setSelectedProductId] = useState('');
   const [quantity, setQuantity] = useState(1);
+  const [customer, setCustomer] = useState({
+    name: '',
+    address: '',
+    gstin: '',
+    phone: '',
+    state_code: DEFAULT_STATE_CODE,
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const activeProduct = useMemo(() =>
     products.find(p => p.id === selectedProductId),
@@ -73,30 +83,76 @@ export const Billing = () => {
     setCart(prev => prev.filter(item => item.product.id !== productId));
   };
 
-  const handleCommit = () => {
+  const handleCommit = async () => {
     if (cart.length === 0) return;
+    const trimmedName = customer.name.trim();
+    if (!trimmedName) {
+      alert('Please enter customer name (Sri.) before committing.');
+      return;
+    }
 
-    cart.forEach(item => {
-      const totals = calculateItemTotals(item.product, item.quantity);
-      addSale({
-        productId: item.product.id,
-        productName: item.product.name,
-        quantitySold: item.quantity,
-        litersPerCan: item.product.litersPerCan,
-        ratePerCan: item.product.dp,
-        totalLiters: totals.totalLiters,
-        totalAmount: totals.totalAmount,
-        calculations: {
-          baseDp: totals.baseDpValue,
-          billDiscountAmount: totals.billDiscountAmount,
-          cdDiscountAmount: totals.cdDiscountAmount,
-          gstAmount: totals.gstAmount
-        }
+    setIsSubmitting(true);
+    try {
+      // Build order items: amount = taxable value (after discounts, before GST)
+      const items = cart.map((item, idx) => {
+        const totals = calculateItemTotals(item.product, item.quantity);
+        const taxableAmount = totals.totalAmount - totals.gstAmount; // after discounts, before GST
+        const rate = taxableAmount / item.quantity;
+        return {
+          sno: idx + 1,
+          description: item.product.name,
+          hsn_sac: '998313',
+          quantity: item.quantity,
+          rate: Math.round(rate * 100) / 100,
+          amount: Math.round(taxableAmount * 100) / 100,
+        };
       });
-    });
 
-    setCart([]);
-    alert("Payload committed to archives successfully.");
+      const { order_id } = await createOrder({
+        customer: {
+          name: trimmedName,
+          address: customer.address.trim() || undefined,
+          gstin: customer.gstin.trim() || undefined,
+          phone: customer.phone.trim() || undefined,
+          state_code: customer.state_code.trim() || DEFAULT_STATE_CODE,
+        },
+        items,
+      });
+
+      const { invoice_no } = await generateInvoice(order_id);
+
+      // Save to local store for History
+      cart.forEach(item => {
+        const totals = calculateItemTotals(item.product, item.quantity);
+        addSale({
+          productId: item.product.id,
+          productName: item.product.name,
+          quantitySold: item.quantity,
+          litersPerCan: item.product.litersPerCan,
+          ratePerCan: item.product.dp,
+          totalLiters: totals.totalLiters,
+          totalAmount: totals.totalAmount,
+          calculations: {
+            baseDp: totals.baseDpValue,
+            billDiscountAmount: totals.billDiscountAmount,
+            cdDiscountAmount: totals.cdDiscountAmount,
+            gstAmount: totals.gstAmount
+          }
+        });
+      });
+
+      setCart([]);
+
+      // Download PDF to user's device
+      await downloadInvoicePdf(order_id, invoice_no);
+
+      alert('Order saved and invoice downloaded successfully.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save order.';
+      alert(`Error: ${msg}\n\nEnsure the invoice backend is running at http://127.0.0.1:8000`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -279,6 +335,63 @@ export const Billing = () => {
                 Fiscal Commit Manifest
               </h3>
 
+              {/* Customer Details (Billed To) */}
+              <div className="mb-10 p-6 bg-slate-950/60 rounded-2xl border border-white/5">
+                <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">Details of Receiver (Billed To)</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest block mb-2">Sri. (Name) *</label>
+                    <input
+                      type="text"
+                      value={customer.name}
+                      onChange={(e) => setCustomer(c => ({ ...c, name: e.target.value }))}
+                      placeholder="Customer name"
+                      className="elite-input w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest block mb-2">Cell</label>
+                    <input
+                      type="text"
+                      value={customer.phone}
+                      onChange={(e) => setCustomer(c => ({ ...c, phone: e.target.value }))}
+                      placeholder="Phone number"
+                      className="elite-input w-full"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest block mb-2">Address</label>
+                    <input
+                      type="text"
+                      value={customer.address}
+                      onChange={(e) => setCustomer(c => ({ ...c, address: e.target.value }))}
+                      placeholder="Full address"
+                      className="elite-input w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest block mb-2">GSTIN</label>
+                    <input
+                      type="text"
+                      value={customer.gstin}
+                      onChange={(e) => setCustomer(c => ({ ...c, gstin: e.target.value }))}
+                      placeholder="GSTIN (optional)"
+                      className="elite-input w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest block mb-2">State Code</label>
+                    <input
+                      type="text"
+                      value={customer.state_code}
+                      onChange={(e) => setCustomer(c => ({ ...c, state_code: e.target.value }))}
+                      placeholder="37 for A.P."
+                      className="elite-input w-full"
+                    />
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-16">
                 <div className="space-y-6">
                   <div className="flex justify-between items-center py-4 border-b border-white/5">
@@ -308,10 +421,11 @@ export const Billing = () => {
 
                   <button
                     onClick={handleCommit}
-                    className="elite-button-success h-20 text-xl shadow-[0_20px_50px_-10px_rgba(16,185,129,0.5)]"
+                    disabled={isSubmitting}
+                    className="elite-button-success h-20 text-xl shadow-[0_20px_50px_-10px_rgba(16,185,129,0.5)] disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     <ShieldCheck size={28} />
-                    COMMIT DISPATCH & PRINT
+                    {isSubmitting ? 'SAVING & GENERATING...' : 'COMMIT DISPATCH & PRINT'}
                   </button>
                 </div>
               </div>
