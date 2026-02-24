@@ -1,0 +1,7 @@
+# Use this if you don't have MySQL (then set USE_SQLITE=1)
+Django>=5.0,<6
+djangorestframework>=3.14
+django-cors-headers>=4.3
+reportlab>=4.0
+Pillow>=10.0
+gunicorn>=21.0
