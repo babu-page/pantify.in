@@ -3,7 +3,7 @@
  * Base URL: VITE_INVOICE_API_URL or http://127.0.0.1:8000
  */
 
-const API_BASE = import.meta.env.VITE_INVOICE_API_URL || 'https://paintifyin-production-b452.up.railway.app';
+const API_BASE =  'https://paintifyin-production-b452.up.railway.app';
 
 export interface CustomerPayload {
   name: string;
